@@ -1,0 +1,20 @@
+[
+  {
+    "name": "rohit",
+    "email": "rohit@gmail.com",
+    "password": "rohit",
+    "role": "citizen"
+  },
+  {
+    "name": "mithun",
+    "email": "kvmithun1234@gmail.com",
+    "password": "mithun",
+    "role": "citizen"
+  },
+  {
+    "name": "udayan",
+    "email": "udayan@gmail.com",
+    "password": "udayan",
+    "role": "citizen"
+  }
+]

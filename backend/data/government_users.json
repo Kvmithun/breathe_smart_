@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Admin Officer",
+    "email": "admin@gov.in",
+    "password": "secure123",
+    "role": "government"
+  },
+  {
+    "name": "Environmental Dept",
+    "email": "envdept@gov.in",
+    "password": "green2025",
+    "role": "government"
+  }
+]
