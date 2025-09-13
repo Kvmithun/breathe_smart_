@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 
+const API_BASE = import.meta.env.VITE_API_BASE; // ✅ use from .env
+
 export default function RewardsPortal() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState({});
 
-  // ✅ Always use the same token key
   const token = localStorage.getItem("access_token");
 
   const fetchLeaderboard = async () => {
     try {
-      const res = await axios.get("http://localhost:5001/api/reports/leaderboard", {
+      const res = await axios.get(`${API_BASE}/api/reports/leaderboard`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -32,12 +33,11 @@ export default function RewardsPortal() {
     setApproving((prev) => ({ ...prev, [user.username]: true }));
     try {
       await axios.post(
-        "http://localhost:5001/api/rewards/approve",
+        `${API_BASE}/api/rewards/approve`,
         {
-          // ✅ send username instead of user.id (since backend doesn’t return id)
           user_id: user.username,
           reward_type: "Amazon Voucher 🎁",
-          reward_value: user.green_credits, // use credits as reward value
+          reward_value: user.green_credits,
         },
         {
           headers: {
