@@ -1,13 +1,18 @@
 from datetime import datetime
 from extensions import db
+from sqlalchemy.ext.hybrid import hybrid_property
 
 class User(db.Model):
     id = db.Column(db.String, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    green_credits = db.Column(db.Integer, default=0)
 
     # ✅ relationship to reports
     reports = db.relationship("Report", backref="user", lazy=True)
+
+    # ✅ green credits always computed from reports
+    @hybrid_property
+    def green_credits(self):
+        return sum(r.awarded_credits or 0 for r in self.reports)
 
 
 class Report(db.Model):
@@ -15,7 +20,7 @@ class Report(db.Model):
 
     # ✅ Link to user
     user_id = db.Column(db.String, db.ForeignKey("user.id"), nullable=True)
-    user_name = db.Column(db.String(80))
+    user_name = db.Column(db.String(80))  # can keep for fast lookups (optional)
 
     # ✅ Report details
     description = db.Column(db.Text, nullable=False)

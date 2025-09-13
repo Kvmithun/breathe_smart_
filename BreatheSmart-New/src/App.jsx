@@ -2,6 +2,7 @@ import React from "react";
 import { Routes, Route, useLocation } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import RewardsPage from "./pages/Rewards";
+import RewardsPortal from "./pages/RewardsPortal";
 import Home from "./pages/Home";
 import SignInCitizen from "./pages/SignInCitizen";
 import SignUpCitizen from "./pages/SignUpCitizen";
@@ -27,11 +28,11 @@ export default function App() {
         <Route path="/signup" element={<SignUpCitizen />} />
         <Route path="/signin-government" element={<SignInGovernment />} />
 
-        {/* Citizen */}
+        {/* Citizen-only */}
         <Route
           path="/citizen"
           element={
-            <ProtectedRoute allowedRole="citizen">
+            <ProtectedRoute allowedRoles={["citizen"]}>
               <CitizenPortal />
             </ProtectedRoute>
           }
@@ -39,17 +40,17 @@ export default function App() {
         <Route
           path="/rewards"
           element={
-            <ProtectedRoute allowedRole="citizen">
+            <ProtectedRoute allowedRoles={["citizen"]}>
               <RewardsPage />
             </ProtectedRoute>
           }
         />
 
-        {/* Government */}
+        {/* Government-only */}
         <Route
           path="/government"
           element={
-            <ProtectedRoute allowedRole="government">
+            <ProtectedRoute allowedRoles={["government"]}>
               <DataDashboard />
             </ProtectedRoute>
           }
@@ -57,8 +58,16 @@ export default function App() {
         <Route
           path="/validation"
           element={
-            <ProtectedRoute allowedRole="government">
+            <ProtectedRoute allowedRoles={["government"]}>
               <ValidationPortal />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/rewards-portal"
+          element={
+            <ProtectedRoute allowedRoles={["government"]}>
+              <RewardsPortal />
             </ProtectedRoute>
           }
         />

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
@@ -14,10 +14,15 @@ export default function CitizenImageReport() {
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
 
+  const [showCamera, setShowCamera] = useState(false);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+
   const storedUser = JSON.parse(localStorage.getItem("user") || "null");
   const token = localStorage.getItem("token");
   const userName = storedUser?.name || null;
 
+  // 🌍 Location
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -32,6 +37,7 @@ export default function CitizenImageReport() {
     }
   }, []);
 
+  // 📥 Fetch reports + leaderboard
   const fetchReports = async () => {
     try {
       const res = await axios.get(`${API_BASE}/api/reports/`);
@@ -64,6 +70,7 @@ export default function CitizenImageReport() {
     return () => clearInterval(interval);
   }, []);
 
+  // 📂 File picker
   const onFileChange = (e) => {
     const f = e.target.files[0];
     if (!f) return;
@@ -71,6 +78,39 @@ export default function CitizenImageReport() {
     setFilePreview(URL.createObjectURL(f));
   };
 
+  // 📷 Camera handling
+  const openCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+      setShowCamera(true);
+    } catch (err) {
+      alert("🚨 Camera access denied or not available.");
+    }
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      canvasRef.current.width = videoRef.current.videoWidth;
+      canvasRef.current.height = videoRef.current.videoHeight;
+      ctx.drawImage(videoRef.current, 0, 0);
+
+      canvasRef.current.toBlob((blob) => {
+        const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
+        setFile(file);
+        setFilePreview(URL.createObjectURL(file));
+      }, "image/jpeg");
+    }
+    setShowCamera(false);
+    const tracks = videoRef.current?.srcObject?.getTracks();
+    tracks?.forEach((t) => t.stop());
+  };
+
+  // 🚀 Upload
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!file) return alert("⚠️ Please choose an image.");
@@ -117,7 +157,7 @@ export default function CitizenImageReport() {
 
   return (
     <div className="bg-gradient-to-r from-sky-50 to-emerald-50 p-6 rounded-2xl shadow-xl border border-emerald-100 text-slate-800">
-      {/* Credits */}
+      {/* 🌱 Credits */}
       {userName && (
         <p className="mb-4 font-semibold text-emerald-700">
           🌱 Your Credits:{" "}
@@ -125,7 +165,7 @@ export default function CitizenImageReport() {
         </p>
       )}
 
-      {/* Report Upload Form */}
+      {/* 📝 Report Upload Form */}
       <form
         onSubmit={handleUpload}
         className="mb-6 bg-white p-4 rounded-lg shadow-md"
@@ -136,12 +176,38 @@ export default function CitizenImageReport() {
           onChange={(e) => setDescription(e.target.value)}
           className="w-full p-3 mb-3 rounded border border-gray-300 text-slate-800 placeholder-gray-400"
         />
+
+        {/* File picker */}
         <input
           type="file"
           accept="image/*"
           onChange={onFileChange}
           className="mb-3 text-sm"
         />
+
+        {/* Camera button */}
+        <button
+          type="button"
+          onClick={openCamera}
+          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-semibold mb-3 ml-2"
+        >
+          📷 Use Camera
+        </button>
+
+        {showCamera && (
+          <div className="mb-3">
+            <video ref={videoRef} className="w-64 rounded border mb-2" />
+            <button
+              type="button"
+              onClick={capturePhoto}
+              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold"
+            >
+              📸 Capture
+            </button>
+            <canvas ref={canvasRef} className="hidden"></canvas>
+          </div>
+        )}
+
         {filePreview && (
           <img
             src={filePreview}
@@ -149,6 +215,7 @@ export default function CitizenImageReport() {
             className="w-48 mb-3 rounded-lg border border-gray-300"
           />
         )}
+
         <button
           type="submit"
           className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold"
@@ -157,7 +224,7 @@ export default function CitizenImageReport() {
         </button>
       </form>
 
-      {/* Reports */}
+      {/* 📋 Reports */}
       <h2 className="text-2xl font-bold mb-3 text-emerald-800">
         📋 Recent Verified Reports
       </h2>
@@ -198,7 +265,7 @@ export default function CitizenImageReport() {
         </ul>
       )}
 
-      {/* Leaderboard */}
+      {/* 🏆 Leaderboard */}
       <h2 className="text-2xl font-bold mt-8 mb-3 text-emerald-800">
         🏆 Green Credits Leaderboard
       </h2>

@@ -19,21 +19,35 @@ POLLUTION_THRESHOLD_PERCENT = 45.0
 DESCRIPTION_THRESHOLD_FRACTION = 0.60
 
 
-# --- Serve uploaded images ---
-@report_bp.route("/uploads/<status>/<filename>")
+# --- Serve uploaded images (safe) ---
+@report_bp.route("/uploads/<status>/<path:filename>")
 def uploaded_file(status, filename):
     """
     Serve files from verified/rejected folders.
     Treat 'approved' same as 'verified' (approved reports use same stored file).
+    filename may include subfolders (e.g. govt_actions/xxx.jpg)
     """
-    if status in ("verified", "approved"):
+    if status in ("verified", "approved", "finalized"):
         folder = current_app.config.get("VERIFIED_FOLDER") or current_app.config.get("UPLOAD_FOLDER")
     elif status == "rejected":
         folder = current_app.config.get("REJECTED_FOLDER") or current_app.config.get("UPLOAD_FOLDER")
     else:
         return jsonify({"error": "Invalid status"}), 400
 
-    return send_from_directory(folder, filename)
+    if not folder:
+        return jsonify({"error": "Server misconfigured: upload folder not set"}), 500
+
+    # normalize paths and prevent path traversal
+    folder = os.path.abspath(folder)
+    requested_path = os.path.abspath(os.path.join(folder, filename))
+
+    # Ensure requested_path is inside folder
+    if not (requested_path == folder or requested_path.startswith(folder + os.sep)):
+        return jsonify({"error": "Invalid filename"}), 400
+
+    # send_from_directory expects a filename relative to folder
+    rel_path = os.path.relpath(requested_path, folder)
+    return send_from_directory(folder, rel_path)
 
 
 # --- Helpers ---
@@ -55,12 +69,29 @@ def get_user_from_json(email: str):
 
     return next((u for u in users if u["email"] == email), None)
 
+
 def serialize_report(r: Report):
-    details = r.details or {}
+    # copy details so we don't mutate DB object
+    details = dict(r.details or {})
 
     # Prefer DB column values, fallback to JSON
     precautions = r.precautions or details.get("precautions") or ""
-    action_taken = r.govt_action or details.get("govt_action") or ""
+    action_taken = r.govt_action or details.get("govt_action") or details.get("action_taken") or ""
+
+    # govt proof filenames stored inside details["govt_proofs"] (list of filenames relative to VERIFIED_FOLDER)
+    govt_proofs_filenames = details.get("govt_proofs", []) or []
+    govt_proofs_urls = []
+    for fn in govt_proofs_filenames:
+        try:
+            # fn may include a subpath like "govt_actions/govt_xxx.jpg"
+            url = url_for("report.uploaded_file", status="approved", filename=fn, _external=True)
+            govt_proofs_urls.append(url)
+        except Exception:
+            # ignore building URL errors (still skip bad entries)
+            pass
+
+    # overwrite details["govt_proofs"] with URL list so frontend can use report.details.govt_proofs directly
+    details["govt_proofs"] = govt_proofs_urls
 
     return {
         "id": r.id,
@@ -77,10 +108,12 @@ def serialize_report(r: Report):
         "details": details,
         "precautions": precautions,
         "action_taken": action_taken,
+        "govt_proofs": govt_proofs_urls,  # also provide top-level convenience field
         "awarded_credits": r.awarded_credits,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "last_checked_at": r.last_checked_at.isoformat() if r.last_checked_at else None,
     }
+
 
 def _normalize_pollution_conf(val) -> float:
     if val is None:
@@ -257,56 +290,114 @@ def upload_report():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 
-# --- Get verified reports (for Validator portal) ---
+# --- Get reports for Validator Portal (pending completion) ---
 @report_bp.route("/", methods=["GET"])
 def get_reports():
-    reports = Report.query.filter_by(status="verified").all()
-    return jsonify([serialize_report(r) for r in reports]), 200
+    reports = Report.query.filter(Report.status.in_(["approved", "verified"])).all()
+    # only show reports where either precautions OR govt_action missing
+    visible = [r for r in reports if not (r.precautions and r.govt_action)]
+    return jsonify([serialize_report(r) for r in visible]), 200
 
-# --- Validator updates report (approve/reject) ---
+
+# --- Validator/Govt updates report ---
 @report_bp.route("/<int:report_id>/validate", methods=["PUT"])
 def validate_report(report_id):
-    data = request.json or {}
+    """
+    Two-step validation supported:
+      - Step 1: validator sends only 'precautions' (JSON). Report remains visible.
+      - Step 2: govt sends 'action_taken' + proof images (multipart/form-data).
+        When both precautions and govt_action exist the report becomes 'finalized'.
+    Accepts:
+      - JSON: {"status":"approved", "precautions":"..."} or {"status":"approved","action_taken":"..."}
+      - multipart/form-data: status, action_taken (or govt_action), proof_images (one or more files).
+    """
     report = Report.query.get_or_404(report_id)
-
-    status = data.get("status")
-    if status not in ["approved", "rejected"]:
-        return jsonify({"error": "Invalid status"}), 400
-
-    report.status = status
     report.details = report.details or {}
 
-    if status == "approved":
-        # Accept both 'precautions' and 'action_taken' keys
-        prec = data.get("precautions", "")
-        action = data.get("action_taken", "") or data.get("govt_action", "")
+    # determine JSON vs multipart
+    content_type = (request.content_type or "").lower()
+    is_multipart = "multipart/form-data" in content_type
 
-        # ✅ Save into both JSON + dedicated columns
-        report.details["precautions"] = prec
-        report.details["govt_action"] = action
-        report.precautions = prec
-        report.govt_action = action
-
+    if is_multipart:
+        data = request.form.to_dict()
+        files = request.files.getlist("proof_images")
     else:
-        # for rejected, optionally record a reason
+        data = request.json or {}
+        files = []
+
+    # allow missing status: default to 'approved' for convenience
+    status = data.get("status", "approved")
+    if status not in ["approved", "rejected", "finalized"]:
+        return jsonify({"error": "Invalid status"}), 400
+
+    # set base status (may be overridden below)
+    report.status = status
+
+    if status == "approved":
+        # ---- STEP 1: store precautions if provided ----
+        if "precautions" in data:
+            prec = data.get("precautions") or ""
+            report.precautions = prec
+            report.details["precautions"] = prec
+
+        # ---- STEP 2: store govt action if provided ----
+        action = data.get("action_taken") or data.get("govt_action")
+        if action is not None:
+            report.govt_action = action
+            report.details["govt_action"] = action
+
+        # ---- handle uploaded proof images (if any) ----
+        if files:
+            # Save govt proof images into a subfolder 'govt_actions' inside VERIFIED_FOLDER (or UPLOAD_FOLDER)
+            saved = report.details.get("govt_proofs", []) or []
+            base_folder = current_app.config.get("VERIFIED_FOLDER") or current_app.config.get("UPLOAD_FOLDER")
+            if not base_folder:
+                current_app.logger.error("No base upload folder configured.")
+                return jsonify({"error": "Server misconfigured: upload folder not set"}), 500
+
+            govt_subfolder = os.path.join(base_folder, "govt_actions")
+            os.makedirs(govt_subfolder, exist_ok=True)
+
+            for f in files:
+                if not f or f.filename == "":
+                    continue
+                safe_basename = secure_filename(f.filename)
+                safe_name = f"govt_{uuid.uuid4().hex}_{safe_basename}"
+                save_path = os.path.join(govt_subfolder, safe_name)
+                try:
+                    f.save(save_path)
+                    # store path relative to base_folder using forward slash for URLs
+                    saved.append(f"govt_actions/{safe_name}")
+                except Exception as e:
+                    current_app.logger.error(f"Failed saving govt proof image: {str(e)}", exc_info=True)
+
+            report.details["govt_proofs"] = saved
+
+        # ---- Finalize when both precautions AND govt_action exist ----
+        if report.precautions and report.govt_action:
+            report.status = "finalized"
+
+    else:  # rejected
         reason = data.get("reason")
         if reason:
             report.details["rejection_reason"] = reason
 
     db.session.commit()
-    return jsonify({"message": f"Report {status}", "report": serialize_report(report)}), 200
+    return jsonify({"message": f"Report {report.status}", "report": serialize_report(report)}), 200
 
-# --- Get approved reports (for Government portal) ---
+
+# --- Govt Portal (finalized reports only) ---
 @report_bp.route("/approved", methods=["GET"])
 def get_approved_reports():
-    reports = Report.query.filter_by(status="approved").all()
+    reports = Report.query.filter_by(status="finalized").all()
     return jsonify([serialize_report(r) for r in reports]), 200
 
 
 # --- Leaderboard ---
 @report_bp.route("/leaderboard", methods=["GET"])
 def leaderboard():
-    reports = Report.query.all()
+    # Only count valid reports
+    reports = Report.query.filter(Report.status.in_(["verified", "approved", "finalized"])).all()
     leaderboard = {}
 
     for r in reports:

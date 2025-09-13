@@ -17,12 +17,13 @@ export default function Navbar() {
   if (role === "citizen") {
     navLinks = [
       { to: "/citizen", label: "Citizen Portal" },
-      { to: "/rewards", label: "Rewards" },
+      { to: "/rewards", label: "Rewards" }, // citizen version
     ];
   } else if (role === "government") {
     navLinks = [
       { to: "/government", label: "Government Portal" },
       { to: "/validation", label: "Validator" },
+      { to: "/rewards-portal", label: "Rewards" }, // government version
     ];
   }
 
